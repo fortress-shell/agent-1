@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"syscall"
@@ -34,14 +33,6 @@ type agentGRPC struct {
 const (
 	pciBusRescanFile = "/sys/bus/pci/rescan"
 	pciBusMode       = 0220
-)
-
-// Signals
-const (
-	// If a process terminates because of signal "n"
-	// The exit code is "128 + signal_number"
-	// http://tldp.org/LDP/abs/html/exitcodes.html
-	exitSignalOffset = 128
 )
 
 // CPU and Memory hotplug
@@ -260,6 +251,15 @@ func (a *agentGRPC) runProcess(cid string, agentProcess *pb.Process) (pid int, e
 		proc = ctr.initProcess
 	}
 
+	// This lock is very important to avoid any race with handleSigChld().
+	// Indeed, if we don't lock this here, we could potentially get the
+	// SIGCHLD signal before the channel has been created, meaning we will
+	// miss the opportunity to get the exit code, leading WaitProcess() to
+	// wait forever on the new channel.
+	// This lock has to be taken before we run the new process.
+	a.sandbox.procChLock.Lock()
+	defer a.sandbox.procChLock.Unlock()
+
 	if err := ctr.container.Run(&(proc.process)); err != nil {
 		return -1, fmt.Errorf("Could not run process: %v", err)
 	}
@@ -288,6 +288,12 @@ func (a *agentGRPC) runProcess(cid string, agentProcess *pb.Process) (pid int, e
 	// Save process info.
 	proc.id = pid
 	ctr.setProcess(pid, proc)
+
+	// Create process channel to allow WaitProcess to wait on it.
+	// This channel is buffered so that handleSigChld() will not
+	// block until WaitProcess listen onto this channel.
+	procCh := make(chan int, 1)
+	a.sandbox.processesCh[pid] = procCh
 
 	return pid, nil
 }
@@ -502,35 +508,22 @@ func (a *agentGRPC) WaitProcess(ctx context.Context, req *pb.WaitProcessRequest)
 		ctr.deleteProcess(proc.id)
 	}()
 
-	fieldLogger := agentLog.WithField("container-pid", proc.id)
-
-	processState, err := proc.process.Wait()
-	// Ignore error if process fails because of an unsuccessful exit code
-	if _, ok := err.(*exec.ExitError); err != nil && !ok {
-		fieldLogger.WithError(err).Error("Process wait failed")
+	procCh, err := a.sandbox.getProcCh(proc.id)
+	if err != nil {
+		return &pb.WaitProcessResponse{}, err
 	}
 
-	// Get exit code
-	exitCode := 255
-	if processState != nil {
-		fieldLogger = fieldLogger.WithField("process-state", fmt.Sprintf("%+v", processState))
-		fieldLogger.Info("Got process state")
+	// Wait for the subreaper to receive the SIGCHLD signal. Once it gets
+	// it, this channel will be notified by receiving the exit code of the
+	// corresponding process.
+	exitCode := <-procCh
 
-		if waitStatus, ok := processState.Sys().(syscall.WaitStatus); ok {
-			exitStatus := waitStatus.ExitStatus()
+	// Ignore errors since the process has already been reaped by the
+	// subreaping loop. This call is only used to make sure libcontainer
+	// properly cleans up its internal structures and pipes.
+	proc.process.Wait()
 
-			if waitStatus.Signaled() {
-				exitCode = exitSignalOffset + int(waitStatus.Signal())
-				fieldLogger.WithField("exit-code", exitCode).Info("process was signaled")
-			} else {
-				exitCode = exitStatus
-				fieldLogger.WithField("exit-code", exitCode).Info("got wait exit code")
-			}
-		}
-
-	} else {
-		fieldLogger.Error("Process state is nil could not get process exit code")
-	}
+	a.sandbox.deleteProcCh(proc.id)
 
 	return &pb.WaitProcessResponse{
 		Status: int32(exitCode),
@@ -671,9 +664,11 @@ func (a *agentGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequ
 	}
 
 	a.sandbox.id = req.Hostname
+	a.sandbox.containers = make(map[string]*container)
 	a.sandbox.network.dns = req.Dns
 	a.sandbox.running = true
 	a.sandbox.sharedPidNs = req.SandboxPidns
+	a.sandbox.processesCh = make(map[int]chan int)
 
 	mountList, err := addMounts(req.Storages)
 	if err != nil {
@@ -719,6 +714,7 @@ func (a *agentGRPC) DestroySandbox(ctx context.Context, req *pb.DestroySandboxRe
 	a.sandbox.network = network{}
 	a.sandbox.mounts = []string{}
 	a.sandbox.sharedPidNs = false
+	a.sandbox.processesCh = make(map[int]chan int)
 
 	// Synchronize the caches on the system. This is needed to ensure
 	// there is no pending transactions left before the VM is shut down.

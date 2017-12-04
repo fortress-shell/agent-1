@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"runtime"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 )
 
@@ -54,6 +56,9 @@ type sandbox struct {
 	grpcListener net.Listener
 	sharedPidNs  bool
 	mounts       []string
+
+	procChLock  sync.RWMutex
+	processesCh map[int]chan int
 }
 
 var agentLog = logrus.WithFields(logrus.Fields{
@@ -170,6 +175,25 @@ func (s *sandbox) deleteContainer(id string) {
 	s.Unlock()
 }
 
+func (s *sandbox) getProcCh(pid int) (chan int, error) {
+	s.procChLock.RLock()
+	defer s.procChLock.RUnlock()
+
+	procCh, exist := s.processesCh[pid]
+	if !exist {
+		return nil, fmt.Errorf("Process %d not found", pid)
+	}
+
+	return procCh, nil
+}
+
+func (s *sandbox) deleteProcCh(pid int) {
+	s.procChLock.Lock()
+	defer s.procChLock.Unlock()
+
+	delete(s.processesCh, pid)
+}
+
 func (s *sandbox) getRunningProcess(cid string, pid int) (*process, *container, error) {
 	if s.running == false {
 		return nil, nil, fmt.Errorf("Sandbox not started")
@@ -221,6 +245,83 @@ func (s *sandbox) readStdio(cid string, pid int, length int, stdout bool) ([]byt
 	}
 
 	return buf, nil
+}
+
+func exitStatus(status unix.WaitStatus) int {
+	if status.Signaled() {
+		return exitSignalOffset + int(status.Signal())
+	}
+
+	return status.ExitStatus()
+}
+
+func (s *sandbox) handleSigChld() error {
+	var (
+		ws  unix.WaitStatus
+		rus unix.Rusage
+	)
+
+	for {
+		pid, err := unix.Wait4(-1, &ws, unix.WNOHANG, &rus)
+		if err != nil {
+			if err == unix.ECHILD {
+				return nil
+			}
+
+			return err
+		}
+		if pid < 1 {
+			return nil
+		}
+
+		status := exitStatus(ws)
+
+		agentLog.WithFields(logrus.Fields{
+			"pid":    pid,
+			"status": status,
+		}).Debug("process exited")
+
+		procCh, err := s.getProcCh(pid)
+		if err != nil {
+			// No need to signal a process which cannot be waited
+			// by WaitProcess().
+			continue
+		}
+
+		// Here, we have to signal the routine listening on
+		// this channel so that it can complete the cleanup
+		// of the process and return the exit code to the
+		// caller of WaitProcess().
+		procCh <- status
+	}
+}
+
+// This loop is meant to be run inside a separate Go routine.
+func (s *sandbox) reaperLoop(sigCh chan os.Signal) {
+	for sig := range sigCh {
+		switch sig {
+		case unix.SIGCHLD:
+			if err := s.handleSigChld(); err != nil {
+				agentLog.Error(err)
+				return
+			}
+		default:
+			agentLog.Infof("Unexpected signal %s, nothing to do...", sig.String())
+		}
+	}
+}
+
+func (s *sandbox) setSubreaper() error {
+	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, uintptr(1), 0, 0, 0); err != nil {
+		return err
+	}
+
+	sigCh := make(chan os.Signal, 512)
+	signal.Notify(sigCh, unix.SIGCHLD)
+
+	go s.reaperLoop(sigCh)
+
+	return nil
 }
 
 func (s *sandbox) initLogger() error {
@@ -312,6 +413,11 @@ func main() {
 	}
 
 	if err = s.initLogger(); err != nil {
+		return
+	}
+
+	// Set agent as subreaper.
+	if err = s.setSubreaper(); err != nil {
 		return
 	}
 
