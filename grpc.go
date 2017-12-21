@@ -23,6 +23,9 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 	"golang.org/x/sys/unix"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcStatus "google.golang.org/grpc/status"
 )
 
 type agentGRPC struct {
@@ -233,7 +236,7 @@ func (a *agentGRPC) Version(ctx context.Context, req *pb.CheckRequest) (*pb.Vers
 // case of ExecProcess.
 func (a *agentGRPC) runProcess(cid string, agentProcess *pb.Process) (pid int, err error) {
 	if a.sandbox.running == false {
-		return -1, fmt.Errorf("Sandbox not started")
+		return -1, grpcStatus.Error(codes.FailedPrecondition, "Sandbox not started")
 	}
 
 	ctr, err := a.sandbox.getContainer(cid)
@@ -249,7 +252,7 @@ func (a *agentGRPC) runProcess(cid string, agentProcess *pb.Process) (pid int, e
 	var proc *process
 	if agentProcess != nil {
 		if status != libcontainer.Running {
-			return -1, fmt.Errorf("Container %s status %s, should be %s", cid, status.String(), libcontainer.Running.String())
+			return -1, grpcStatus.Errorf(codes.FailedPrecondition, "Container %s status %s, should be %s", cid, status.String(), libcontainer.Running.String())
 		}
 
 		proc, err = buildProcess(agentProcess)
@@ -258,7 +261,7 @@ func (a *agentGRPC) runProcess(cid string, agentProcess *pb.Process) (pid int, e
 		}
 	} else {
 		if status != libcontainer.Created {
-			return -1, fmt.Errorf("Container %s status %s, should be %s", cid, status.String(), libcontainer.Created.String())
+			return -1, grpcStatus.Errorf(codes.FailedPrecondition, "Container %s status %s, should be %s", cid, status.String(), libcontainer.Created.String())
 		}
 
 		proc = ctr.initProcess
@@ -274,7 +277,7 @@ func (a *agentGRPC) runProcess(cid string, agentProcess *pb.Process) (pid int, e
 	defer a.sandbox.subreaper.RUnlock()
 
 	if err := ctr.container.Run(&(proc.process)); err != nil {
-		return -1, fmt.Errorf("Could not run process: %v", err)
+		return -1, grpcStatus.Errorf(grpc.Code(err), "Could not run process: %v", err)
 	}
 	defer proc.closePostStartFDs()
 
@@ -312,11 +315,11 @@ func (a *agentGRPC) runProcess(cid string, agentProcess *pb.Process) (pid int, e
 
 func (a *agentGRPC) CreateContainer(ctx context.Context, req *pb.CreateContainerRequest) (*gpb.Empty, error) {
 	if a.sandbox.running == false {
-		return emptyResp, fmt.Errorf("Sandbox not started, impossible to run a new container")
+		return emptyResp, grpcStatus.Error(codes.FailedPrecondition, "Sandbox not started, impossible to run a new container")
 	}
 
 	if _, err := a.sandbox.getContainer(req.ContainerId); err == nil {
-		return emptyResp, fmt.Errorf("Container %s already exists, impossible to create", req.ContainerId)
+		return emptyResp, grpcStatus.Errorf(codes.AlreadyExists, "Container %s already exists, impossible to create", req.ContainerId)
 	}
 
 	// re-scan PCI bus
@@ -473,12 +476,12 @@ func (a *agentGRPC) ExecProcess(ctx context.Context, req *pb.ExecProcessRequest)
 
 func (a *agentGRPC) SignalProcess(ctx context.Context, req *pb.SignalProcessRequest) (*gpb.Empty, error) {
 	if a.sandbox.running == false {
-		return emptyResp, fmt.Errorf("Sandbox not started, impossible to signal the container")
+		return emptyResp, grpcStatus.Error(codes.FailedPrecondition, "Sandbox not started, impossible to signal the container")
 	}
 
 	ctr, err := a.sandbox.getContainer(req.ContainerId)
 	if err != nil {
-		return emptyResp, fmt.Errorf("Could not signal process %d: %v", req.PID, err)
+		return emptyResp, grpcStatus.Errorf(grpc.Code(err), "Could not signal process %d: %v", req.PID, err)
 	}
 
 	status, err := ctr.container.Status()
@@ -504,7 +507,7 @@ func (a *agentGRPC) SignalProcess(ctx context.Context, req *pb.SignalProcessRequ
 
 	proc, err := ctr.getProcess(int(req.PID))
 	if err != nil {
-		return emptyResp, fmt.Errorf("Could not signal process: %v", err)
+		return emptyResp, grpcStatus.Errorf(grpc.Code(err), "Could not signal process: %v", err)
 	}
 
 	if err := proc.process.Signal(signal); err != nil {
@@ -568,7 +571,7 @@ func (a *agentGRPC) RemoveContainer(ctx context.Context, req *pb.RemoveContainer
 				return emptyResp, err
 			}
 		case <-time.After(time.Duration(req.Timeout) * time.Second):
-			return emptyResp, fmt.Errorf("Timeout reached after %ds", timeout)
+			return emptyResp, grpcStatus.Errorf(codes.DeadlineExceeded, "Timeout reached after %ds", timeout)
 		}
 	}
 
@@ -649,7 +652,7 @@ func (a *agentGRPC) TtyWinResize(ctx context.Context, req *pb.TtyWinResizeReques
 	}
 
 	if proc.termMaster == nil {
-		return emptyResp, fmt.Errorf("Terminal is not set, impossible to resize it")
+		return emptyResp, grpcStatus.Error(codes.FailedPrecondition, "Terminal is not set, impossible to resize it")
 	}
 
 	winsize := &unix.Winsize{
@@ -667,7 +670,7 @@ func (a *agentGRPC) TtyWinResize(ctx context.Context, req *pb.TtyWinResizeReques
 
 func (a *agentGRPC) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequest) (*gpb.Empty, error) {
 	if a.sandbox.running == true {
-		return emptyResp, fmt.Errorf("Sandbox already started, impossible to start again")
+		return emptyResp, grpcStatus.Error(codes.AlreadyExists, "Sandbox already started, impossible to start again")
 	}
 
 	a.sandbox.id = req.Hostname
