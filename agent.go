@@ -24,6 +24,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcStatus "google.golang.org/grpc/status"
 )
 
 type process struct {
@@ -151,7 +153,7 @@ func (c *container) getProcess(pid int) (*process, error) {
 
 	proc, exist := c.processes[pid]
 	if !exist {
-		return nil, fmt.Errorf("Process %d not found (container %s)", pid, c.id)
+		return nil, grpcStatus.Errorf(codes.NotFound, "Process %d not found (container %s)", pid, c.id)
 	}
 
 	return proc, nil
@@ -163,7 +165,7 @@ func (s *sandbox) getContainer(id string) (*container, error) {
 
 	ctr, exist := s.containers[id]
 	if !exist {
-		return nil, fmt.Errorf("Container %s not found", id)
+		return nil, grpcStatus.Errorf(codes.NotFound, "Container %s not found", id)
 	}
 
 	return ctr, nil
@@ -183,7 +185,7 @@ func (s *sandbox) deleteContainer(id string) {
 
 func (s *sandbox) getRunningProcess(cid string, pid int) (*process, *container, error) {
 	if s.running == false {
-		return nil, nil, fmt.Errorf("Sandbox not started")
+		return nil, nil, grpcStatus.Error(codes.FailedPrecondition, "Sandbox not started")
 	}
 
 	ctr, err := s.getContainer(cid)
@@ -197,7 +199,7 @@ func (s *sandbox) getRunningProcess(cid string, pid int) (*process, *container, 
 	}
 
 	if status != libcontainer.Running {
-		return nil, nil, fmt.Errorf("Container %s %s, should be %s", cid, status.String(), libcontainer.Running.String())
+		return nil, nil, grpcStatus.Errorf(codes.FailedPrecondition,"Container %s %s, should be %s", cid, status.String(), libcontainer.Running.String())
 	}
 
 	proc, err := ctr.getProcess(pid)
