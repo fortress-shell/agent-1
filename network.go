@@ -15,6 +15,8 @@ import (
 	pb "github.com/kata-containers/agent/protocols/grpc"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
+	"google.golang.org/grpc/codes"
+	grpcStatus "google.golang.org/grpc/status"
 )
 
 // Network fully describes a sandbox network with its interfaces, routes and dns
@@ -51,7 +53,7 @@ func linkByHwAddr(netHandle *netlink.Handle, hwAddr string) (netlink.Link, error
 		}
 	}
 
-	return nil, fmt.Errorf("Could not find the link corresponding to HwAddr %q", hwAddr)
+	return nil, grpcStatus.Errorf(codes.NotFound, "Could not find the link corresponding to HwAddr %q", hwAddr)
 }
 
 func updateInterfaceAddrs(netHandle *netlink.Handle, link netlink.Link, addrs []*pb.IPAddress, add bool) error {
@@ -60,17 +62,17 @@ func updateInterfaceAddrs(netHandle *netlink.Handle, link netlink.Link, addrs []
 
 		netlinkAddr, err := netlink.ParseAddr(netlinkAddrStr)
 		if err != nil {
-			return fmt.Errorf("Could not parse %q: %v", netlinkAddrStr, err)
+			return grpcStatus.Errorf(codes.Internal, "Could not parse %q: %v", netlinkAddrStr, err)
 		}
 
 		if add {
 			if err := netHandle.AddrAdd(link, netlinkAddr); err != nil {
-				return fmt.Errorf("Could not add %s to interface %v: %v",
+				return grpcStatus.Errorf(codes.Internal, "Could not add %s to interface %v: %v",
 					netlinkAddrStr, link, err)
 			}
 		} else {
 			if err := netHandle.AddrDel(link, netlinkAddr); err != nil {
-				return fmt.Errorf("Could not remove %s from interface %v: %v",
+				return grpcStatus.Errorf(codes.Internal, "Could not remove %s from interface %v: %v",
 					netlinkAddrStr, link, err)
 			}
 		}
@@ -98,7 +100,7 @@ func updateLink(netHandle *netlink.Handle, link netlink.Link, iface *pb.Interfac
 	case pb.UpdateType_MTU:
 		return updateInterfaceMTU(netHandle, link, int(iface.Mtu))
 	default:
-		return fmt.Errorf("Unknown UpdateType %v", actionType)
+		return grpcStatus.Errorf(codes.InvalidArgument, "Unknown UpdateType %v", actionType)
 	}
 }
 
@@ -115,7 +117,7 @@ func (s *sandbox) addInterface(netHandle *netlink.Handle, iface *pb.Interface) (
 	}
 
 	if iface == nil {
-		return fmt.Errorf("Provided interface is nil")
+		return grpcStatus.Error(codes.InvalidArgument, "Provided interface is nil")
 	}
 
 	hwAddr, err := net.ParseMAC(iface.HwAddr)
@@ -200,7 +202,7 @@ func (s *sandbox) updateInterface(netHandle *netlink.Handle, iface *pb.Interface
 	}
 
 	if iface == nil {
-		return fmt.Errorf("Provided interface is nil")
+		return grpcStatus.Error(codes.InvalidArgument, "Provided interface is nil")
 	}
 
 	fieldLogger := agentLog.WithFields(logrus.Fields{
@@ -226,7 +228,7 @@ func (s *sandbox) updateInterface(netHandle *netlink.Handle, iface *pb.Interface
 			return err
 		}
 	} else {
-		return fmt.Errorf("Interface HwAddr and Name are both empty")
+		return grpcStatus.Error(codes.InvalidArgument, "Interface HwAddr and Name are both empty")
 	}
 
 	fieldLogger.WithField("link", fmt.Sprintf("%+v", link)).Info("Link found")
@@ -272,25 +274,25 @@ func (s *sandbox) updateRoute(netHandle *netlink.Handle, route *pb.Route, add bo
 	}
 
 	if route == nil {
-		return fmt.Errorf("Provided route is nil")
+		return grpcStatus.Error(codes.InvalidArgument, "Provided route is nil")
 	}
 
 	// Find link index from route's device name.
 	link, err := netHandle.LinkByName(route.Device)
 	if err != nil {
-		return fmt.Errorf("Could not find link from device %s: %v", route.Device, err)
+		return grpcStatus.Errorf(codes.InvalidArgument, "Could not find link from device %s: %v", route.Device, err)
 	}
 
 	linkAttrs := link.Attrs()
 	if linkAttrs == nil {
-		return fmt.Errorf("Could not get link's attributes for device %s", route.Device)
+		return grpcStatus.Errorf(codes.NotFound, "Could not get link's attributes for device %s", route.Device)
 	}
 
 	var dst *net.IPNet
 	if route.Dest != "default" {
 		_, dst, err = net.ParseCIDR(route.Dest)
 		if err != nil {
-			return fmt.Errorf("Could not parse route destination %s: %v", route.Dest, err)
+			return grpcStatus.Errorf(codes.Internal, "Could not parse route destination %s: %v", route.Dest, err)
 		}
 	}
 
@@ -302,7 +304,7 @@ func (s *sandbox) updateRoute(netHandle *netlink.Handle, route *pb.Route, add bo
 
 	if add {
 		if err := netHandle.RouteAdd(netRoute); err != nil {
-			return fmt.Errorf("Could not add route dest(%s)/gw(%s)/dev(%s): %v",
+			return grpcStatus.Errorf(codes.Internal, "Could not add route dest(%s)/gw(%s)/dev(%s): %v",
 				route.Dest, route.Gateway, route.Device, err)
 		}
 
@@ -310,7 +312,7 @@ func (s *sandbox) updateRoute(netHandle *netlink.Handle, route *pb.Route, add bo
 		s.network.routes = append(s.network.routes, route)
 	} else {
 		if err := netHandle.RouteDel(netRoute); err != nil {
-			return fmt.Errorf("Could not remove route dest(%s)/gw(%s)/dev(%s): %v",
+			return grpcStatus.Errorf(codes.Internal, "Could not remove route dest(%s)/gw(%s)/dev(%s): %v",
 				route.Dest, route.Gateway, route.Device, err)
 		}
 
@@ -352,20 +354,20 @@ func (s *sandbox) removeNetwork() error {
 
 	for _, route := range s.network.routes {
 		if err := s.removeRoute(netHandle, route); err != nil {
-			return fmt.Errorf("Could not remove network route %v: %v",
+			return grpcStatus.Errorf(codes.Internal, "Could not remove network route %v: %v",
 				route, err)
 		}
 	}
 
 	for _, iface := range s.network.ifaces {
 		if err := s.removeInterface(netHandle, iface.Name); err != nil {
-			return fmt.Errorf("Could not remove network interface %v: %v",
+			return grpcStatus.Errorf(codes.Internal, "Could not remove network interface %v: %v",
 				iface, err)
 		}
 	}
 
 	if err := removeDNS(s.network.dns); err != nil {
-		return fmt.Errorf("Could not remove network DNS: %v", err)
+		return grpcStatus.Errorf(codes.Internal, "Could not remove network DNS: %v", err)
 	}
 
 	return nil
