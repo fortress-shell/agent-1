@@ -15,6 +15,8 @@ import (
 
 	"github.com/mdlayher/vsock"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcStatus "google.golang.org/grpc/status"
 
 	agentgrpc "github.com/kata-containers/agent/protocols/grpc"
 )
@@ -72,16 +74,16 @@ func parse(sock string) (*url.URL, error) {
 	switch addr.Scheme {
 	case vsockSocketScheme:
 		if addr.Hostname() == "" || addr.Port() == "" || addr.Path != "" {
-			return nil, fmt.Errorf("Invalid vsock scheme: %s", sock)
+			return nil, grpcStatus.Errorf(codes.InvalidArgument,"Invalid vsock scheme: %s", sock)
 		}
 	case unixSocketScheme:
 		fallthrough
 	case "":
 		if (addr.Host == "" && addr.Path == "") || addr.Port() != "" {
-			return nil, fmt.Errorf("Invalid unix scheme: %s", sock)
+			return nil, grpcStatus.Errorf(codes.InvalidArgument,"Invalid unix scheme: %s", sock)
 		}
 	default:
-		return nil, fmt.Errorf("Invalid scheme: %s", sock)
+		return nil, grpcStatus.Errorf(codes.InvalidArgument,"Invalid scheme: %s", sock)
 	}
 
 	return addr, nil
@@ -105,7 +107,7 @@ func unixDialer(sock string, timeout time.Duration) (net.Conn, error) {
 	}
 
 	if addr.Scheme != unixSocketScheme && addr.Scheme != "" {
-		return nil, fmt.Errorf("Invalid URL scheme: %s", addr.Scheme)
+		return nil, grpcStatus.Errorf(codes.InvalidArgument,"Invalid URL scheme: %s", addr.Scheme)
 	}
 
 	return net.DialTimeout("unix", addr.Host+addr.Path, timeout)
@@ -118,10 +120,10 @@ func vsockDialer(sock string, timeout time.Duration) (net.Conn, error) {
 	}
 
 	if addr.Scheme != vsockSocketScheme {
-		return nil, fmt.Errorf("Invalid URL scheme: %s", addr.Scheme)
+		return nil, grpcStatus.Errorf(codes.InvalidArgument,"Invalid URL scheme: %s", addr.Scheme)
 	}
 
-	invalidVsockMsgErr := fmt.Errorf("invalid vsock destination: %s", sock)
+	invalidVsockMsgErr := grpcStatus.Errorf(codes.InvalidArgument,"invalid vsock destination: %s", sock)
 	cid, err := strconv.ParseUint(addr.Hostname(), 10, 32)
 	if err != nil {
 		return nil, invalidVsockMsgErr
@@ -159,7 +161,7 @@ func vsockDialer(sock string, timeout time.Duration) (net.Conn, error) {
 
 	var conn net.Conn
 	var ok bool
-	timeoutErrMsg := fmt.Errorf("timed out connecting to vsock %d:%d", cid, port)
+	timeoutErrMsg := grpcStatus.Errorf(codes.DeadlineExceeded, "timed out connecting to vsock %d:%d", cid, port)
 	select {
 	case <-t.C:
 		cancel <- true
