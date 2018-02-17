@@ -7,12 +7,11 @@
 package mockserver
 
 import (
-	"errors"
-	"fmt"
-
 	google_protobuf2 "github.com/golang/protobuf/ptypes/empty"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcStatus "google.golang.org/grpc/status"
 
 	pb "github.com/kata-containers/agent/protocols/grpc"
 )
@@ -50,7 +49,7 @@ func NewMockServer() *grpc.Server {
 
 func validateOCISpec(spec *pb.Spec) error {
 	if spec == nil || spec.Process == nil {
-		return errors.New("invalid container spec")
+		return grpcStatus.Errorf(codes.InvalidArgument, "invalid container spec")
 	}
 	return nil
 }
@@ -63,30 +62,30 @@ func (m *mockServer) nextPid() uint32 {
 
 func (m *mockServer) checkExist(containerId string, pid uint32, createContainer, checkProcess bool) error {
 	if m.pod == nil {
-		return errors.New("pod not created")
+		return grpcStatus.Errorf(codes.Internal, "pod not created")
 	}
 	if containerId == "" {
-		return errors.New("container ID must be set")
+		return grpcStatus.Errorf(codes.InvalidArgument, "container ID must be set")
 	}
 	if checkProcess && pid == 0 {
-		return errors.New("process ID must be set")
+		return grpcStatus.Errorf(codes.InvalidArgument, "process ID must be set")
 	}
 
 	// Check container existence
 	if createContainer {
 		if m.pod.containers[containerId] != nil {
-			return fmt.Errorf("container ID %s already taken", containerId)
+			return grpcStatus.Errorf(codes.InvalidArgument, "container ID %s already taken", containerId)
 		}
 		return nil
 	} else if m.pod.containers[containerId] == nil {
-		return fmt.Errorf("container %s does not exist", containerId)
+		return grpcStatus.Errorf(codes.InvalidArgument, "container %s does not exist", containerId)
 	}
 
 	// Check process existence
 	if checkProcess {
 		c := m.pod.containers[containerId]
 		if c.proc[pid] == nil {
-			return fmt.Errorf("process %d does not exist", pid)
+			return grpcStatus.Errorf(codes.InvalidArgument, "process %d does not exist", pid)
 		}
 	}
 
@@ -107,7 +106,7 @@ func (m *mockServer) containerNonExist(containerId string) error {
 
 func (m *mockServer) podExist() error {
 	if m.pod == nil {
-		return errors.New("pod not created")
+		return grpcStatus.Errorf(codes.Internal, "pod not created")
 	}
 	return nil
 }
@@ -231,7 +230,7 @@ func (m *mockServer) TtyWinResize(ctx context.Context, req *pb.TtyWinResizeReque
 
 func (m *mockServer) CreateSandbox(ctx context.Context, req *pb.CreateSandboxRequest) (*google_protobuf2.Empty, error) {
 	if m.pod != nil {
-		return nil, errors.New("pod already created")
+		return nil, grpcStatus.Errorf(codes.Internal, "pod already created")
 	}
 	m.pod = &pod{
 		nextPid:    podStartingPid,
