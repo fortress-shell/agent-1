@@ -7,8 +7,10 @@
 package grpc
 
 import (
-	"fmt"
 	"reflect"
+
+	"google.golang.org/grpc/codes"
+	grpcStatus "google.golang.org/grpc/status"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -51,7 +53,7 @@ func copyValue(to, from reflect.Value) error {
 					to.Set(from.Convert(to.Type()))
 					return nil
 				} else {
-					return fmt.Errorf("Can not convert %v to %v", from.Type(), to.Type())
+					return grpcStatus.Errorf(codes.InvalidArgument, "Can not convert %v to %v", from.Type(), to.Type())
 				}
 			} else {
 				to.Set(from)
@@ -63,7 +65,7 @@ func copyValue(to, from reflect.Value) error {
 
 func copyMapValue(to, from reflect.Value) error {
 	if to.Kind() != reflect.Map && from.Kind() != reflect.Map {
-		return fmt.Errorf("Can only copy maps into maps")
+		return grpcStatus.Errorf(codes.InvalidArgument, "Can only copy maps into maps")
 	}
 
 	to.Set(reflect.MakeMap(to.Type()))
@@ -86,7 +88,7 @@ func copyMapValue(to, from reflect.Value) error {
 
 func copySliceValue(to, from reflect.Value) error {
 	if to.Kind() != reflect.Slice && from.Kind() != reflect.Slice {
-		return fmt.Errorf("Can only copy slices into slices")
+		return grpcStatus.Errorf(codes.InvalidArgument, "Can only copy slices into slices")
 	}
 
 	sliceLen := from.Len()
@@ -123,7 +125,7 @@ func copyStructSkipField(to, from reflect.Value) bool {
 
 func structFieldName(v reflect.Value, index int) (string, error) {
 	if v.Kind() != reflect.Struct {
-		return "", fmt.Errorf("Can only infer field name from structs")
+		return "", grpcStatus.Errorf(codes.InvalidArgument, "Can only infer field name from structs")
 	}
 
 	return v.Type().Field(index).Name, nil
@@ -139,7 +141,7 @@ func isEmbeddedStruct(v reflect.Value, index int) bool {
 
 func findStructField(v reflect.Value, name string) (reflect.Value, error) {
 	if v.Kind() != reflect.Struct {
-		return reflect.Value{}, fmt.Errorf("Can only infer field name from structs")
+		return reflect.Value{}, grpcStatus.Errorf(codes.InvalidArgument, "Can only infer field name from structs")
 	}
 
 	for i := 0; i < v.NumField(); i++ {
@@ -148,12 +150,12 @@ func findStructField(v reflect.Value, name string) (reflect.Value, error) {
 		}
 	}
 
-	return reflect.Value{}, fmt.Errorf("Could not find field %s", name)
+	return reflect.Value{}, grpcStatus.Errorf(codes.InvalidArgument, "Could not find field %s", name)
 }
 
 func copyStructValue(to, from reflect.Value) error {
 	if to.Kind() != reflect.Struct && from.Kind() != reflect.Struct {
-		return fmt.Errorf("Can only copy structs into structs")
+		return grpcStatus.Errorf(codes.InvalidArgument, "Can only copy structs into structs")
 	}
 
 	if copyStructSkipField(to, from) {
@@ -212,7 +214,7 @@ func copyStruct(to interface{}, from interface{}) (err error) {
 
 	if toVal.Kind() != reflect.Ptr || toVal.Elem().Kind() != reflect.Struct ||
 		fromVal.Kind() != reflect.Ptr || fromVal.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("Arguments must be pointers to structures")
+		return grpcStatus.Errorf(codes.InvalidArgument, "Arguments must be pointers to structures")
 	}
 
 	toVal = toVal.Elem()
