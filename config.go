@@ -34,7 +34,7 @@ func newConfig(level logrus.Level) agentConfig {
 //Get the agent configuration from kernel cmdline
 func (c *agentConfig) getConfig(cmdLineFile string) error {
 	if cmdLineFile == "" {
-		return grpcStatus.Error(codes.FailedPrecondition,"Kernel cmdline file cannot be empty")
+		return grpcStatus.Error(codes.FailedPrecondition, "Kernel cmdline file cannot be empty")
 	}
 
 	kernelCmdline, err := ioutil.ReadFile(cmdLineFile)
@@ -83,7 +83,7 @@ func (c *agentConfig) parseCmdlineOption(option string) error {
 		c.logLevel = level
 	default:
 		if strings.HasPrefix(split[optionPosition], optionPrefix) {
-			return grpcStatus.Errorf(codes.NotFound,"Unknown option %s", split[optionPosition])
+			return grpcStatus.Errorf(codes.NotFound, "Unknown option %s", split[optionPosition])
 		}
 	}
 

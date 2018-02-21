@@ -113,7 +113,7 @@ func (h *Handler) Read() (*Uevent, error) {
 
 		idx := strings.Index(keyValue, "=")
 		if idx < 1 {
-			return nil, grpcStatus.Errorf(codes.InvalidArgument,"Could not decode uevent: Wrong format %q", keyValue)
+			return nil, grpcStatus.Errorf(codes.InvalidArgument, "Could not decode uevent: Wrong format %q", keyValue)
 		}
 
 		// The key is the first parameter, and the value is the rest

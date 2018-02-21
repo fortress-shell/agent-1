@@ -157,7 +157,7 @@ func (c *container) getProcess(execID string) (*process, error) {
 
 	proc, exist := c.processes[execID]
 	if !exist {
-		return nil, grpcStatus.Errorf(codes.NotFound,"Process %s not found (container %s)", execID, c.id)
+		return nil, grpcStatus.Errorf(codes.NotFound, "Process %s not found (container %s)", execID, c.id)
 	}
 
 	return proc, nil
@@ -203,7 +203,7 @@ func (s *sandbox) getProcess(cid, execID string) (*process, *container, error) {
 	}
 
 	if status == libcontainer.Stopped {
-		return nil, nil, grpcStatus.Errorf(codes.FailedPrecondition,"Container %s is stopped", cid)
+		return nil, nil, grpcStatus.Errorf(codes.FailedPrecondition, "Container %s is stopped", cid)
 	}
 
 	proc, err := ctr.getProcess(execID)
@@ -424,9 +424,9 @@ func initAgentAsInit() error {
 			return err
 		}
 		if flags, options, err := parseMountFlagsAndOptions(m.options); err != nil {
-			return grpcStatus.Errorf(codes.Internal,"Could parseMountFlagsAndOptions(%v)", m.options)
+			return grpcStatus.Errorf(codes.Internal, "Could parseMountFlagsAndOptions(%v)", m.options)
 		} else if err = syscall.Mount(m.src, m.dest, m.fstype, uintptr(flags), options); err != nil {
-			return grpcStatus.Errorf(codes.Internal,"Could not mount %v to %v: %v", m.src, m.dest, err)
+			return grpcStatus.Errorf(codes.Internal, "Could not mount %v to %v: %v", m.src, m.dest, err)
 		}
 	}
 	if err := syscall.Unlink("/dev/ptmx"); err != nil {
